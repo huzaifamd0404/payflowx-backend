@@ -1,5 +1,6 @@
 package com.payflowx.backend.service;
 
+import com.payflowx.backend.dto.BankProcessingResult;
 import com.payflowx.backend.dto.PaymentRequest;
 import com.payflowx.backend.dto.PaymentResponse;
 import com.payflowx.backend.entity.Payment;
@@ -39,9 +40,11 @@ public class PaymentServiceImpl implements PaymentService {
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("999999999.99");
     
     private final PaymentRepository paymentRepository;
+    private final BankService bankService;
     
-    public PaymentServiceImpl(PaymentRepository paymentRepository) {
+    public PaymentServiceImpl(PaymentRepository paymentRepository, BankService bankService) {
         this.paymentRepository = paymentRepository;
+        this.bankService = bankService;
     }
     
     @Override
@@ -98,6 +101,121 @@ public class PaymentServiceImpl implements PaymentService {
                 .orElseThrow(() -> new PaymentNotFoundException(paymentReference));
         
         return mapToResponse(payment);
+    }
+    
+    @Override
+    public PaymentResponse processPayment(String paymentReference) {
+        logger.info("Processing payment with reference: {}", paymentReference);
+        
+        // Fetch payment
+        Payment payment = paymentRepository.findByPaymentReference(paymentReference)
+                .orElseThrow(() -> new PaymentNotFoundException(paymentReference));
+        
+        // Validate payment can be processed
+        validatePaymentForProcessing(payment);
+        
+        // Update status to VALIDATED
+        updatePaymentStatus(payment, PaymentStatus.VALIDATED, "Payment validated and ready for processing");
+        
+        // Update status to PROCESSING
+        updatePaymentStatus(payment, PaymentStatus.PROCESSING, "Payment being processed with bank");
+        
+        // Process with mock bank
+        BankProcessingResult bankResult = bankService.processPayment(payment);
+        
+        // Update payment based on bank result
+        if (bankResult.isSuccess()) {
+            handleSuccessfulPayment(payment, bankResult);
+        } else {
+            handleFailedPayment(payment, bankResult);
+        }
+        
+        // Save and return
+        Payment updatedPayment = paymentRepository.save(payment);
+        
+        logger.info("Payment {} processing completed with status: {}", 
+                   paymentReference, updatedPayment.getStatus());
+        
+        return mapToResponse(updatedPayment);
+    }
+    
+    /**
+     * Validate payment can be processed
+     */
+    private void validatePaymentForProcessing(Payment payment) {
+        if (payment.getStatus() == PaymentStatus.SUCCESS) {
+            throw new PaymentValidationException("Payment already processed successfully");
+        }
+        
+        if (payment.getStatus() == PaymentStatus.PROCESSING) {
+            throw new PaymentValidationException("Payment is already being processed");
+        }
+    }
+    
+    /**
+     * Handle successful payment
+     */
+    private void handleSuccessfulPayment(Payment payment, BankProcessingResult bankResult) {
+        logger.info("Payment {} approved by bank. Transaction ID: {}", 
+                   payment.getPaymentReference(), bankResult.getTransactionId());
+        
+        payment.setStatus(PaymentStatus.SUCCESS);
+        payment.setFailureReason(null);
+        
+        PaymentEvent successEvent = PaymentEvent.builder()
+                .status(PaymentStatus.SUCCESS)
+                .eventType("PAYMENT_SUCCESS")
+                .message("Payment approved by bank")
+                .eventData(String.format("Transaction ID: %s, Response Code: %s, Processing Time: %dms", 
+                          bankResult.getTransactionId(), 
+                          bankResult.getResponseCode(), 
+                          bankResult.getProcessingTimeMs()))
+                .source("MOCK_BANK")
+                .build();
+        
+        payment.addEvent(successEvent);
+    }
+    
+    /**
+     * Handle failed payment
+     */
+    private void handleFailedPayment(Payment payment, BankProcessingResult bankResult) {
+        logger.warn("Payment {} declined by bank. Reason: {} ({})", 
+                   payment.getPaymentReference(), 
+                   bankResult.getMessage(), 
+                   bankResult.getResponseCode());
+        
+        payment.setStatus(PaymentStatus.FAILED);
+        payment.setFailureReason(bankResult.getMessage() + " (Code: " + bankResult.getResponseCode() + ")");
+        
+        PaymentEvent failureEvent = PaymentEvent.builder()
+                .status(PaymentStatus.FAILED)
+                .eventType("PAYMENT_FAILED")
+                .message("Payment declined by bank")
+                .eventData(String.format("Response Code: %s, Reason: %s, Processing Time: %dms", 
+                          bankResult.getResponseCode(), 
+                          bankResult.getMessage(), 
+                          bankResult.getProcessingTimeMs()))
+                .source("MOCK_BANK")
+                .build();
+        
+        payment.addEvent(failureEvent);
+    }
+    
+    /**
+     * Update payment status and add event
+     */
+    private void updatePaymentStatus(Payment payment, PaymentStatus status, String message) {
+        payment.setStatus(status);
+        
+        PaymentEvent event = PaymentEvent.builder()
+                .status(status)
+                .eventType("STATUS_CHANGE")
+                .message(message)
+                .source("SYSTEM")
+                .build();
+        
+        payment.addEvent(event);
     }
     
     /**

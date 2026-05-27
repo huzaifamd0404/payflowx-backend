@@ -21,4 +21,11 @@ public interface PaymentService {
      * @return Payment response
      */
     PaymentResponse getPaymentByReference(String paymentReference);
+    
+    /**
+     * Process payment with bank
+     * @param paymentReference Unique payment reference
+     * @return Updated payment response
+     */
+    PaymentResponse processPayment(String paymentReference);
 }

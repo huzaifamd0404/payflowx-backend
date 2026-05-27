@@ -54,4 +54,20 @@ public class PaymentController {
         
         return ResponseEntity.ok(response);
     }
+    
+    /**
+     * Process payment with bank
+     * POST /api/payments/{paymentReference}/process
+     */
+    @PostMapping("/{paymentReference}/process")
+    public ResponseEntity<PaymentResponse> processPayment(@PathVariable String paymentReference) {
+        logger.info("Received request to process payment with reference: {}", paymentReference);
+        
+        PaymentResponse response = paymentService.processPayment(paymentReference);
+        
+        logger.info("Payment {} processed with final status: {}", 
+                   paymentReference, response.getStatus());
+        
+        return ResponseEntity.ok(response);
+    }
 }

@@ -8,8 +8,4 @@ public class PaymentNotFoundException extends RuntimeException {
     public PaymentNotFoundException(String message) {
         super(message);
     }
-    
-    public PaymentNotFoundException(String paymentReference) {
-        super("Payment not found with reference: " + paymentReference);
-    }
 }
