@@ -67,7 +67,8 @@ class PaymentControllerIntegrationTest {
                 .andDo(print())
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.status", is(400)))
-                .andExpect(jsonPath("$.error", is("Validation Failed")));
+                .andExpect(jsonPath("$.error", is("Validation Failed")))
+                .andExpect(jsonPath("$.message", is("Amount must be greater than zero")));
     }
     
     @Test
@@ -83,7 +84,45 @@ class PaymentControllerIntegrationTest {
                 .content(objectMapper.writeValueAsString(request)))
                 .andDo(print())
                 .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.message", is("Customer ID is required")))
                 .andExpect(jsonPath("$.validationErrors[*].field", hasItem("customerId")));
+    }
+
+    @Test
+    void createPayment_MissingMerchantId_ReturnsBadRequest() throws Exception {
+        PaymentRequest request = PaymentRequest.builder()
+                .customerId("CUST001")
+                .amount(new BigDecimal("2500.00"))
+                .currency("USD")
+                .build();
+
+        mockMvc.perform(post("/api/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andDo(print())
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.message", is("Merchant ID is required")))
+                .andExpect(jsonPath("$.validationErrors[*].field", hasItem("merchantId")));
+    }
+
+    @Test
+    void createPayment_EmptyCurrency_ReturnsBadRequest() throws Exception {
+        PaymentRequest request = PaymentRequest.builder()
+                .customerId("CUST001")
+                .merchantId("MER001")
+                .amount(new BigDecimal("2500.00"))
+                .currency("")
+                .build();
+
+        mockMvc.perform(post("/api/payments")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+                .andDo(print())
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status", is(400)))
+                .andExpect(jsonPath("$.message", is("Currency is required")));
     }
     
     @Test

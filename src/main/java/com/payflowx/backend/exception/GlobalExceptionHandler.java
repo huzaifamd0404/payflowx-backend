@@ -4,6 +4,7 @@ import com.payflowx.backend.dto.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -35,16 +36,20 @@ public class GlobalExceptionHandler {
         
         List<ErrorResponse.ValidationError> validationErrors = new ArrayList<>();
         ex.getBindingResult().getAllErrors().forEach(error -> {
-            String fieldName = ((FieldError) error).getField();
+                        String fieldName = error instanceof FieldError fieldError ? fieldError.getField() : error.getObjectName();
             String errorMessage = error.getDefaultMessage();
             validationErrors.add(new ErrorResponse.ValidationError(fieldName, errorMessage));
         });
+
+                String primaryMessage = validationErrors.isEmpty()
+                                ? "Invalid request parameters"
+                                : validationErrors.get(0).getMessage();
         
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .timestamp(LocalDateTime.now())
                 .status(HttpStatus.BAD_REQUEST.value())
                 .error("Validation Failed")
-                .message("Invalid request parameters")
+                                .message(primaryMessage)
                 .path(request.getRequestURI())
                 .validationErrors(validationErrors)
                 .build();
@@ -114,6 +119,27 @@ public class GlobalExceptionHandler {
         
         return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
     }
+
+        /**
+         * Handle duplicate key violations from database constraints
+         */
+        @ExceptionHandler(DataIntegrityViolationException.class)
+        public ResponseEntity<ErrorResponse> handleDataIntegrityViolationException(
+                        DataIntegrityViolationException ex,
+                        HttpServletRequest request) {
+
+                logger.error("Data integrity violation: {}", ex.getMessage());
+
+                ErrorResponse errorResponse = ErrorResponse.builder()
+                                .timestamp(LocalDateTime.now())
+                                .status(HttpStatus.CONFLICT.value())
+                                .error("Duplicate Payment")
+                                .message("Duplicate payment reference")
+                                .path(request.getRequestURI())
+                                .build();
+
+                return ResponseEntity.status(HttpStatus.CONFLICT).body(errorResponse);
+        }
     
     /**
      * Handle all other exceptions

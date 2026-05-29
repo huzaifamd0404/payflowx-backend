@@ -28,7 +28,7 @@ public class PaymentRequest {
     private String merchantId;
     
     @NotNull(message = "Amount is required")
-    @DecimalMin(value = "0.01", message = "Amount must be greater than 0")
+    @DecimalMin(value = "0.01", message = "Amount must be greater than zero")
     @DecimalMax(value = "999999999.99", message = "Amount exceeds maximum limit")
     @Digits(integer = 9, fraction = 2, message = "Amount must have at most 9 integer digits and 2 decimal places")
     private BigDecimal amount;
@@ -38,3 +38,4 @@ public class PaymentRequest {
     @Pattern(regexp = "^[A-Z]{3}$", message = "Currency must be a valid 3-letter ISO code (e.g., USD, EUR, GBP)")
     private String currency;
 }
+

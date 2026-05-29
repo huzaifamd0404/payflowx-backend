@@ -12,6 +12,7 @@ import com.payflowx.backend.exception.PaymentValidationException;
 import com.payflowx.backend.repository.PaymentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +39,7 @@ public class PaymentServiceImpl implements PaymentService {
     
     private static final BigDecimal MIN_AMOUNT = new BigDecimal("0.01");
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("999999999.99");
+    private static final int MAX_REFERENCE_GENERATION_RETRIES = 5;
     
     private final PaymentRepository paymentRepository;
     private final BankService bankService;
@@ -56,7 +58,7 @@ public class PaymentServiceImpl implements PaymentService {
         validatePaymentRequest(request);
         
         // Generate unique payment reference
-        String paymentReference = generatePaymentReference(request);
+        String paymentReference = generateUniquePaymentReference();
         
         // Check for duplicate payment reference
         if (paymentRepository.existsByPaymentReference(paymentReference)) {
@@ -85,7 +87,13 @@ public class PaymentServiceImpl implements PaymentService {
         payment.addEvent(initiationEvent);
         
         // Save payment
-        Payment savedPayment = paymentRepository.save(payment);
+        Payment savedPayment;
+        try {
+            savedPayment = paymentRepository.save(payment);
+        } catch (DataIntegrityViolationException ex) {
+            logger.error("Duplicate payment reference detected while saving: {}", paymentReference, ex);
+            throw new DuplicatePaymentException("Payment with reference " + paymentReference + " already exists");
+        }
         
         logger.info("Payment created successfully with reference: {}", paymentReference);
         
@@ -242,11 +250,11 @@ public class PaymentServiceImpl implements PaymentService {
      */
     private void validateAmount(BigDecimal amount) {
         if (amount == null) {
-            throw new PaymentValidationException("Amount cannot be null");
+            throw new PaymentValidationException("Amount is required");
         }
         
-        if (amount.compareTo(MIN_AMOUNT) < 0) {
-            throw new PaymentValidationException("Amount must be greater than or equal to " + MIN_AMOUNT);
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new PaymentValidationException("Amount must be greater than zero");
         }
         
         if (amount.compareTo(MAX_AMOUNT) > 0) {
@@ -263,7 +271,7 @@ public class PaymentServiceImpl implements PaymentService {
      */
     private void validateCurrency(String currency) {
         if (currency == null || currency.trim().isEmpty()) {
-            throw new PaymentValidationException("Currency cannot be null or empty");
+            throw new PaymentValidationException("Currency is required");
         }
         
         if (!SUPPORTED_CURRENCIES.contains(currency.toUpperCase())) {
@@ -277,7 +285,7 @@ public class PaymentServiceImpl implements PaymentService {
      */
     private void validateCustomerId(String customerId) {
         if (customerId == null || customerId.trim().isEmpty()) {
-            throw new PaymentValidationException("Customer ID cannot be null or empty");
+            throw new PaymentValidationException("Customer ID is required");
         }
         
         if (customerId.length() < 3) {
@@ -298,7 +306,7 @@ public class PaymentServiceImpl implements PaymentService {
      */
     private void validateMerchantId(String merchantId) {
         if (merchantId == null || merchantId.trim().isEmpty()) {
-            throw new PaymentValidationException("Merchant ID cannot be null or empty");
+            throw new PaymentValidationException("Merchant ID is required");
         }
         
         if (merchantId.length() < 3) {
@@ -318,13 +326,21 @@ public class PaymentServiceImpl implements PaymentService {
      * Generate unique payment reference
      * Format: PAY-{YYYYMMDD}-{HHMMSS}-{UUID}
      */
-    private String generatePaymentReference(PaymentRequest request) {
-        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
-        String uniqueId = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        String reference = String.format("PAY-%s-%s", timestamp, uniqueId);
-        
-        logger.debug("Generated payment reference: {}", reference);
-        return reference;
+    private String generateUniquePaymentReference() {
+        for (int attempt = 1; attempt <= MAX_REFERENCE_GENERATION_RETRIES; attempt++) {
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd-HHmmss"));
+            String uniqueId = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+            String reference = String.format("PAY-%s-%s", timestamp, uniqueId);
+
+            if (!paymentRepository.existsByPaymentReference(reference)) {
+                logger.debug("Generated payment reference: {}", reference);
+                return reference;
+            }
+
+            logger.warn("Duplicate payment reference generated on attempt {}: {}", attempt, reference);
+        }
+
+        throw new DuplicatePaymentException("Unable to generate unique payment reference");
     }
     
     /**
