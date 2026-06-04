@@ -127,16 +127,9 @@ public class PaymentServiceImpl implements PaymentService {
         
         // Update status to PROCESSING
         updatePaymentStatus(payment, PaymentStatus.PROCESSING, "Payment being processed with bank");
-        
-        // Process with mock bank
-        BankProcessingResult bankResult = bankService.processPayment(payment);
-        
-        // Update payment based on bank result
-        if (bankResult.isSuccess()) {
-            handleSuccessfulPayment(payment, bankResult);
-        } else {
-            handleFailedPayment(payment, bankResult);
-        }
+
+        // Process with mock bank and update final status.
+        processPaymentWithMockBank(payment);
         
         // Save and return
         Payment updatedPayment = paymentRepository.save(payment);
@@ -145,6 +138,20 @@ public class PaymentServiceImpl implements PaymentService {
                    paymentReference, updatedPayment.getStatus());
         
         return mapToResponse(updatedPayment);
+    }
+
+    /**
+     * Internal mock bank processing method.
+     */
+    private void processPaymentWithMockBank(Payment payment) {
+        BankProcessingResult bankResult = bankService.processPayment(payment);
+
+        if (bankResult.isSuccess()) {
+            handleSuccessfulPayment(payment, bankResult);
+            return;
+        }
+
+        handleFailedPayment(payment, bankResult);
     }
     
     /**
