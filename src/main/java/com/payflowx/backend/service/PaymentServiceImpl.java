@@ -1,6 +1,7 @@
 package com.payflowx.backend.service;
 
 import com.payflowx.backend.dto.BankProcessingResult;
+import com.payflowx.backend.dto.PaymentEventDto;
 import com.payflowx.backend.dto.PaymentRequest;
 import com.payflowx.backend.dto.PaymentResponse;
 import com.payflowx.backend.entity.Payment;
@@ -43,10 +44,15 @@ public class PaymentServiceImpl implements PaymentService {
     
     private final PaymentRepository paymentRepository;
     private final BankService bankService;
+    private final PaymentEventProducerService paymentEventProducerService;
     
-    public PaymentServiceImpl(PaymentRepository paymentRepository, BankService bankService) {
+    public PaymentServiceImpl(
+            PaymentRepository paymentRepository,
+            BankService bankService,
+            PaymentEventProducerService paymentEventProducerService) {
         this.paymentRepository = paymentRepository;
         this.bankService = bankService;
+        this.paymentEventProducerService = paymentEventProducerService;
     }
     
     @Override
@@ -133,6 +139,8 @@ public class PaymentServiceImpl implements PaymentService {
         
         // Save and return
         Payment updatedPayment = paymentRepository.save(payment);
+
+        publishProcessedPaymentEvent(updatedPayment);
         
         logger.info("Payment {} processing completed with status: {}", 
                    paymentReference, updatedPayment.getStatus());
@@ -152,6 +160,24 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         handleFailedPayment(payment, bankResult);
+    }
+
+    /**
+     * Publish Kafka event for terminal payment status.
+     */
+    private void publishProcessedPaymentEvent(Payment payment) {
+        if (payment.getStatus() != PaymentStatus.SUCCESS && payment.getStatus() != PaymentStatus.FAILED) {
+            return;
+        }
+
+        PaymentEventDto paymentEventDto = PaymentEventDto.builder()
+                .paymentReference(payment.getPaymentReference())
+                .status(payment.getStatus().name())
+                .amount(payment.getAmount())
+                .timestamp(payment.getUpdatedAt() != null ? payment.getUpdatedAt() : LocalDateTime.now())
+                .build();
+
+        paymentEventProducerService.publishPaymentEvent(paymentEventDto);
     }
     
     /**
