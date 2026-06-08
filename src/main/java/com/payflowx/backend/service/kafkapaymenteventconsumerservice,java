@@ -1,0 +1,74 @@
+package com.payflowx.backend.service;
+
+import com.payflowx.backend.dto.PaymentEventDto;
+import com.payflowx.backend.entity.Payment;
+import com.payflowx.backend.entity.PaymentEvent;
+import com.payflowx.backend.entity.PaymentStatus;
+import com.payflowx.backend.repository.PaymentEventRepository;
+import com.payflowx.backend.repository.PaymentRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Locale;
+
+/**
+ * Kafka consumer for payment events.
+ */
+@Service
+public class KafkaPaymentEventConsumerService {
+
+    private static final Logger logger = LoggerFactory.getLogger(KafkaPaymentEventConsumerService.class);
+
+    private final PaymentRepository paymentRepository;
+    private final PaymentEventRepository paymentEventRepository;
+
+    public KafkaPaymentEventConsumerService(
+            PaymentRepository paymentRepository,
+            PaymentEventRepository paymentEventRepository) {
+        this.paymentRepository = paymentRepository;
+        this.paymentEventRepository = paymentEventRepository;
+    }
+
+    @KafkaListener(topics = "${app.kafka.topic.payment-events}", groupId = "${spring.kafka.consumer.group-id}")
+    @Transactional
+    public void consumePaymentEvent(PaymentEventDto eventDto) {
+        if (eventDto == null || eventDto.getPaymentReference() == null || eventDto.getStatus() == null) {
+            logger.warn("Received invalid payment event payload: {}", eventDto);
+            return;
+        }
+
+        PaymentStatus status;
+        try {
+            status = PaymentStatus.valueOf(eventDto.getStatus().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            logger.warn("Received payment event with unsupported status '{}' for reference: {}",
+                    eventDto.getStatus(), eventDto.getPaymentReference());
+            return;
+        }
+
+        Payment payment = paymentRepository.findByPaymentReference(eventDto.getPaymentReference())
+                .orElse(null);
+
+        if (payment == null) {
+            logger.warn("Payment not found for consumed event reference: {}", eventDto.getPaymentReference());
+            return;
+        }
+
+        PaymentEvent paymentEvent = PaymentEvent.builder()
+                .payment(payment)
+                .status(status)
+                .eventType("KAFKA_PAYMENT_EVENT")
+                .eventData(String.format("amount=%s,timestamp=%s", eventDto.getAmount(), eventDto.getTimestamp()))
+                .message("Payment event consumed from Kafka topic payment-events")
+                .source("KAFKA_CONSUMER")
+                .build();
+
+        PaymentEvent savedEvent = paymentEventRepository.save(paymentEvent);
+
+        logger.info("Consumed payment event saved successfully. eventId={}, paymentReference={}, status={}",
+                savedEvent.getId(), eventDto.getPaymentReference(), status);
+    }
+}
