@@ -51,6 +51,34 @@ class PaymentControllerIntegrationTest {
                 .andExpect(jsonPath("$.status", is(PaymentStatus.INITIATED.toString())))
                 .andExpect(jsonPath("$.createdAt", notNullValue()));
     }
+
+    @Test
+    void getPayment_ExistingReference_ReturnsPayment() throws Exception {
+        PaymentRequest request = PaymentRequest.builder()
+                .customerId("CUST010")
+                .merchantId("MER010")
+                .amount(new BigDecimal("1200.00"))
+                .currency("USD")
+                .build();
+
+        String createResponse = mockMvc.perform(post("/api/payments")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isCreated())
+                .andReturn()
+                .getResponse()
+                .getContentAsString();
+
+        String paymentReference = objectMapper.readTree(createResponse)
+                .get("paymentReference")
+                .asText();
+
+        mockMvc.perform(get("/api/payments/{paymentReference}", paymentReference))
+                .andDo(print())
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.paymentReference", is(paymentReference)))
+                .andExpect(jsonPath("$.status", is(PaymentStatus.INITIATED.toString())));
+    }
     
     @Test
     void createPayment_InvalidAmount_ReturnsBadRequest() throws Exception {

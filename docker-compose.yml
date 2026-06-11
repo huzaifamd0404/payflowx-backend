@@ -1,6 +1,12 @@
 version: "3.8"
 
 services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: payflowx-redis
+    ports:
+      - "6379:6379"
+
   zookeeper:
     image: confluentinc/cp-zookeeper:7.6.1
     container_name: payflowx-zookeeper

@@ -11,13 +11,18 @@ import com.payflowx.backend.exception.DuplicatePaymentException;
 import com.payflowx.backend.exception.PaymentNotFoundException;
 import com.payflowx.backend.exception.PaymentValidationException;
 import com.payflowx.backend.repository.PaymentRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
@@ -41,18 +46,28 @@ public class PaymentServiceImpl implements PaymentService {
     private static final BigDecimal MIN_AMOUNT = new BigDecimal("0.01");
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("999999999.99");
     private static final int MAX_REFERENCE_GENERATION_RETRIES = 5;
+    private static final String PAYMENT_STATUS_CACHE_KEY_PREFIX = "payment:status:";
     
     private final PaymentRepository paymentRepository;
     private final BankService bankService;
     private final PaymentEventProducerService paymentEventProducerService;
+    private final StringRedisTemplate stringRedisTemplate;
+    private final ObjectMapper objectMapper;
+    private final long paymentStatusCacheTtlMinutes;
     
     public PaymentServiceImpl(
             PaymentRepository paymentRepository,
             BankService bankService,
-            PaymentEventProducerService paymentEventProducerService) {
+            PaymentEventProducerService paymentEventProducerService,
+            StringRedisTemplate stringRedisTemplate,
+            ObjectMapper objectMapper,
+            @Value("${app.cache.payment-status.ttl-minutes:30}") long paymentStatusCacheTtlMinutes) {
         this.paymentRepository = paymentRepository;
         this.bankService = bankService;
         this.paymentEventProducerService = paymentEventProducerService;
+        this.stringRedisTemplate = stringRedisTemplate;
+        this.objectMapper = objectMapper;
+        this.paymentStatusCacheTtlMinutes = paymentStatusCacheTtlMinutes;
     }
     
     @Override
@@ -102,19 +117,33 @@ public class PaymentServiceImpl implements PaymentService {
         }
         
         logger.info("Payment created successfully with reference: {}", paymentReference);
-        
-        return mapToResponse(savedPayment);
+
+        PaymentResponse response = mapToResponse(savedPayment);
+        cachePaymentResponse(response);
+
+        return response;
     }
     
     @Override
     @Transactional(readOnly = true)
     public PaymentResponse getPaymentByReference(String paymentReference) {
         logger.info("Fetching payment with reference: {}", paymentReference);
+
+        PaymentResponse cachedResponse = getCachedPaymentResponse(paymentReference);
+        if (cachedResponse != null) {
+            logger.info("Payment {} found in Redis cache", paymentReference);
+            return cachedResponse;
+        }
+        
+        logger.info("Payment {} not found in Redis cache. Fetching from PostgreSQL", paymentReference);
         
         Payment payment = paymentRepository.findByPaymentReference(paymentReference)
                 .orElseThrow(() -> new PaymentNotFoundException(paymentReference));
-        
-        return mapToResponse(payment);
+
+        PaymentResponse response = mapToResponse(payment);
+        cachePaymentResponse(response);
+
+        return response;
     }
     
     @Override
@@ -144,8 +173,55 @@ public class PaymentServiceImpl implements PaymentService {
         
         logger.info("Payment {} processing completed with status: {}", 
                    paymentReference, updatedPayment.getStatus());
-        
-        return mapToResponse(updatedPayment);
+
+        PaymentResponse response = mapToResponse(updatedPayment);
+        cachePaymentResponse(response);
+
+        return response;
+    }
+
+    private PaymentResponse getCachedPaymentResponse(String paymentReference) {
+        String cacheKey = buildPaymentStatusCacheKey(paymentReference);
+
+        try {
+            String cachedValue = stringRedisTemplate.opsForValue().get(cacheKey);
+            if (cachedValue == null || cachedValue.isBlank()) {
+                return null;
+            }
+
+            return objectMapper.readValue(cachedValue, PaymentResponse.class);
+        } catch (JsonProcessingException ex) {
+            logger.warn("Unable to deserialize cached payment response for key {}", cacheKey, ex);
+            return null;
+        } catch (Exception ex) {
+            logger.warn("Redis unavailable while reading key {}", cacheKey, ex);
+            return null;
+        }
+    }
+
+    private void cachePaymentResponse(PaymentResponse paymentResponse) {
+        if (paymentResponse == null || paymentResponse.getPaymentReference() == null) {
+            return;
+        }
+
+        String cacheKey = buildPaymentStatusCacheKey(paymentResponse.getPaymentReference());
+
+        try {
+            String serializedResponse = objectMapper.writeValueAsString(paymentResponse);
+            stringRedisTemplate.opsForValue().set(
+                    cacheKey,
+                    serializedResponse,
+                    Duration.ofMinutes(paymentStatusCacheTtlMinutes)
+            );
+        } catch (JsonProcessingException ex) {
+            logger.warn("Unable to serialize payment response for cache key {}", cacheKey, ex);
+        } catch (Exception ex) {
+            logger.warn("Redis unavailable while writing key {}", cacheKey, ex);
+        }
+    }
+
+    private String buildPaymentStatusCacheKey(String paymentReference) {
+        return PAYMENT_STATUS_CACHE_KEY_PREFIX + paymentReference;
     }
 
     /**
