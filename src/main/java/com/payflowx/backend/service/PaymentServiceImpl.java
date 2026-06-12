@@ -10,6 +10,7 @@ import com.payflowx.backend.entity.PaymentStatus;
 import com.payflowx.backend.exception.DuplicatePaymentException;
 import com.payflowx.backend.exception.PaymentNotFoundException;
 import com.payflowx.backend.exception.PaymentValidationException;
+import com.payflowx.backend.exception.TransientBankApiException;
 import com.payflowx.backend.repository.PaymentRepository;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -228,7 +229,29 @@ public class PaymentServiceImpl implements PaymentService {
      * Internal mock bank processing method.
      */
     private void processPaymentWithMockBank(Payment payment) {
-        BankProcessingResult bankResult = bankService.processPayment(payment);
+        BankProcessingResult bankResult;
+        try {
+            bankResult = bankService.processPayment(payment);
+        } catch (TransientBankApiException ex) {
+            logger.error("Bank processing failed for payment {} after retries. Marking as FAILED.",
+                    payment.getPaymentReference(), ex);
+
+            if (payment.getStatus() != PaymentStatus.RETRYING) {
+                updatePaymentStatus(payment, PaymentStatus.RETRYING, "Retrying payment after transient bank failure");
+            }
+
+            bankResult = BankProcessingResult.builder()
+                    .success(false)
+                    .responseCode("BANK_UNAVAILABLE")
+                    .message("Bank service unavailable after retries: " + ex.getMessage())
+                    .processingTimeMs(0L)
+                    .build();
+        }
+
+        if (payment.getStatus() == PaymentStatus.RETRYING) {
+            updatePaymentStatus(payment, PaymentStatus.RETRYING,
+                    "Retry attempted due to transient bank API failure");
+        }
 
         if (bankResult.isSuccess()) {
             handleSuccessfulPayment(payment, bankResult);

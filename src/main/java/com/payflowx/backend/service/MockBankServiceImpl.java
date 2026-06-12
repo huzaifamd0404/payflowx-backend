@@ -1,7 +1,11 @@
 package com.payflowx.backend.service;
 
 import com.payflowx.backend.dto.BankProcessingResult;
+import com.payflowx.backend.entity.PaymentStatus;
 import com.payflowx.backend.entity.Payment;
+import com.payflowx.backend.exception.TransientBankApiException;
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+import io.github.resilience4j.retry.annotation.Retry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -21,10 +25,13 @@ public class MockBankServiceImpl implements BankService {
     private static final int MIN_PROCESSING_DELAY_MS = 500;
     private static final int MAX_PROCESSING_DELAY_MS = 3000;
     private static final double SUCCESS_RATE = 0.7; // 70% success rate
+    private static final String BANK_RESILIENCE_INSTANCE = "bankProcessing";
     
     private final Random random = new Random();
     
     @Override
+    @Retry(name = BANK_RESILIENCE_INSTANCE, fallbackMethod = "processPaymentFallback")
+    @CircuitBreaker(name = BANK_RESILIENCE_INSTANCE, fallbackMethod = "processPaymentFallback")
     public BankProcessingResult processPayment(Payment payment) {
         logger.info("Processing payment {} with mock bank", payment.getPaymentReference());
         
@@ -51,16 +58,28 @@ public class MockBankServiceImpl implements BankService {
         } catch (InterruptedException e) {
             logger.error("Bank processing interrupted for payment {}", payment.getPaymentReference(), e);
             Thread.currentThread().interrupt();
-            
-            long processingTime = System.currentTimeMillis() - startTime;
-            return BankProcessingResult.builder()
-                    .success(false)
-                    .responseCode("ERR_INTERRUPTED")
-                    .message("Processing interrupted")
-                    .processingTimeMs(processingTime)
-                    .build();
+
+            payment.setStatus(PaymentStatus.RETRYING);
+            throw new TransientBankApiException("Processing interrupted", e);
         }
     }
+
+        /**
+         * Fallback when retries are exhausted or circuit breaker is open.
+         */
+        private BankProcessingResult processPaymentFallback(Payment payment, Throwable throwable) {
+        logger.error("Bank fallback triggered for payment {}. Cause: {}",
+                    payment.getPaymentReference(), throwable.getMessage(), throwable);
+
+        payment.setStatus(PaymentStatus.FAILED);
+
+        return BankProcessingResult.builder()
+                    .success(false)
+                    .responseCode("BANK_UNAVAILABLE")
+                    .message("Bank service unavailable after retries/circuit breaker: " + throwable.getMessage())
+                    .processingTimeMs(0L)
+                    .build();
+        }
     
     /**
      * Build success result
@@ -86,6 +105,13 @@ public class MockBankServiceImpl implements BankService {
     private BankProcessingResult buildFailureResult(Payment payment, long processingTime) {
         // Randomly select a failure reason
         FailureReason reason = getRandomFailureReason();
+
+        if (reason == FailureReason.BANK_TIMEOUT) {
+            logger.warn("Transient bank failure for payment {}. Marking as RETRYING before retry.",
+                    payment.getPaymentReference());
+            payment.setStatus(PaymentStatus.RETRYING);
+            throw new TransientBankApiException("Bank timeout during processing");
+        }
         
         logger.warn("Mock bank declined payment {} with reason: {} ({})", 
                    payment.getPaymentReference(), reason.getMessage(), reason.getCode());
