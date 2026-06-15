@@ -1,0 +1,160 @@
+{
+  "info": {
+    "_postman_id": "c7f4e3bf-8fa8-4a7b-81a8-bbd2740c72e7",
+    "name": "PayFlowX High Volume",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Collection Runner scenario for high request volume. Each iteration creates a payment and immediately processes it."
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/actuator/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "actuator",
+            "health"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Health endpoint is UP', function () {",
+              "    pm.response.to.have.status(200);",
+              "    var body = pm.response.json();",
+              "    pm.expect(body.status).to.eql('UP');",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Create Payment",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"customerId\": \"{{customerId}}\",\n  \"merchantId\": \"{{merchantId}}\",\n  \"amount\": {{amount}},\n  \"currency\": \"{{currency}}\"\n}"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/payments",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "payments"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Payment created', function () {",
+              "    pm.response.to.have.status(201);",
+              "});",
+              "",
+              "var createBody = pm.response.json();",
+              "pm.environment.set('currentPaymentReference', createBody.paymentReference);",
+              "",
+              "var refsRaw = pm.environment.get('allPaymentReferences') || '[]';",
+              "var refs = [];",
+              "try { refs = JSON.parse(refsRaw); } catch (e) { refs = []; }",
+              "refs.push(createBody.paymentReference);",
+              "pm.environment.set('allPaymentReferences', JSON.stringify(refs));",
+              "",
+              "var processUrl = pm.environment.get('baseUrl') + '/api/payments/' + createBody.paymentReference + '/process';",
+              "pm.sendRequest({",
+              "    url: processUrl,",
+              "    method: 'POST',",
+              "    header: { 'Content-Type': 'application/json' }",
+              "}, function (err, res) {",
+              "    if (err) {",
+              "        console.log('Process request error for', createBody.paymentReference, err);",
+              "        return;",
+              "    }",
+              "",
+              "    pm.test('Process payment returned 200 for ' + createBody.paymentReference, function () {",
+              "        pm.expect(res.code).to.eql(200);",
+              "    });",
+              "",
+              "    var processed = Number(pm.environment.get('processedCount') || '0') + 1;",
+              "    pm.environment.set('processedCount', String(processed));",
+              "",
+              "    var processBody = {};",
+              "    try { processBody = res.json(); } catch (e) { processBody = {}; }",
+              "    var status = processBody.status || 'UNKNOWN';",
+              "",
+              "    if (status === 'SUCCESS') {",
+              "        var successCount = Number(pm.environment.get('successCount') || '0') + 1;",
+              "        pm.environment.set('successCount', String(successCount));",
+              "    } else if (status === 'FAILED') {",
+              "        var failedCount = Number(pm.environment.get('failedCount') || '0') + 1;",
+              "        pm.environment.set('failedCount', String(failedCount));",
+              "    }",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Get Payment",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/payments/{{currentPaymentReference}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "payments",
+            "{{currentPaymentReference}}"
+          ]
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "pm.test('Get payment response OK', function () {",
+              "    pm.response.to.have.status(200);",
+              "});",
+              "",
+              "var body = pm.response.json();",
+              "pm.test('Reference should match', function () {",
+              "    pm.expect(body.paymentReference).to.eql(pm.environment.get('currentPaymentReference'));",
+              "});"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    }
+  ]
+}
