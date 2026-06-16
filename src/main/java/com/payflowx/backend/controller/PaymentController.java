@@ -31,13 +31,13 @@ public class PaymentController {
      */
     @PostMapping
     public ResponseEntity<PaymentResponse> createPayment(@Valid @RequestBody PaymentRequest request) {
-        logger.info("Received payment creation request for customer: {}, merchant: {}, amount: {} {}", 
-                    request.getCustomerId(), request.getMerchantId(), 
-                    request.getAmount(), request.getCurrency());
+        logger.info("event=create_payment_request customerId={} merchantId={} amount={} currency={}",
+            request.getCustomerId(), request.getMerchantId(), request.getAmount(), request.getCurrency());
         
         PaymentResponse response = paymentService.createPayment(request);
         
-        logger.info("Payment created successfully with reference: {}", response.getPaymentReference());
+        logger.info("event=create_payment_success paymentReference={} status={}",
+            response.getPaymentReference(), response.getStatus());
         
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
@@ -48,7 +48,7 @@ public class PaymentController {
      */
     @GetMapping("/{paymentReference}")
     public ResponseEntity<PaymentResponse> getPayment(@PathVariable String paymentReference) {
-        logger.info("Received request to fetch payment with reference: {}", paymentReference);
+        logger.info("event=get_payment_request paymentReference={}", paymentReference);
         
         PaymentResponse response = paymentService.getPaymentByReference(paymentReference);
         
@@ -61,12 +61,12 @@ public class PaymentController {
      */
     @PostMapping("/{paymentReference}/process")
     public ResponseEntity<PaymentResponse> processPayment(@PathVariable String paymentReference) {
-        logger.info("Received request to process payment with reference: {}", paymentReference);
+        logger.info("event=process_payment_request paymentReference={}", paymentReference);
         
         PaymentResponse response = paymentService.processPayment(paymentReference);
         
-        logger.info("Payment {} processed with final status: {}", 
-                   paymentReference, response.getStatus());
+        logger.info("event=process_payment_success paymentReference={} finalStatus={}",
+            paymentReference, response.getStatus());
         
         return ResponseEntity.ok(response);
     }

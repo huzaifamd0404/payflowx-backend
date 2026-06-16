@@ -20,8 +20,11 @@ public class ErrorResponse {
     private LocalDateTime timestamp;
     private int status;
     private String error;
+    private String errorCode;
     private String message;
     private String path;
+    private String method;
+    private String correlationId;
     private List<ValidationError> validationErrors;
     
     @Data
